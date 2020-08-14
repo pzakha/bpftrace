@@ -30,6 +30,7 @@ void setup_mock_bpftrace(MockBPFtrace &bpftrace)
         std::string tracepoints = "sched:sched_one\n"
                                   "sched:sched_two\n"
                                   "sched:foo\n"
+                                  "sched_extra:sched_extra\n"
                                   "notsched:bar\n"
                                   "file:filename\n";
         return std::unique_ptr<std::istream>(new std::istringstream(tracepoints));
@@ -77,6 +78,17 @@ void setup_mock_bpftrace(MockBPFtrace &bpftrace)
                       .bitfield = {},
                   } } },
   };
+  bpftrace.structs_["struct _tracepoint_sched_extra_sched_extra"] = Struct{
+    .size = 8,
+    .fields = { { "common_field",
+                  Field{
+                      .type = CreateUInt64(),
+                      .offset = 24, // different offset than
+                                    // sched_(one|two).common_field
+                      .is_bitfield = false,
+                      .bitfield = {},
+                  } } },
+  };
   bpftrace.structs_["struct _tracepoint_tcp_some_tcp_tp"] = Struct{
     .size = 16,
     .fields = { { "saddr_v6",
@@ -88,9 +100,7 @@ void setup_mock_bpftrace(MockBPFtrace &bpftrace)
                   } } },
   };
 
-  auto ptr_type = CreateUInt64();
-  ptr_type.is_pointer = true;
-  ptr_type.pointee_size = 1;
+  auto ptr_type = CreatePointer(CreateInt8());
   bpftrace.structs_["struct _tracepoint_file_filename"] = Struct{
     .size = 8,
     .fields = { { "filename",

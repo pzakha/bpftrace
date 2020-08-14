@@ -58,7 +58,6 @@ namespace {
  *     ehci_disable_ASE [ehci_hcd]
  */
 std::set<std::string> find_wildcard_matches_internal(
-    const std::string &prefix,
     const std::string &func,
     bool ignore_trailing_module,
     std::istream &symbol_stream)
@@ -73,20 +72,12 @@ std::set<std::string> find_wildcard_matches_internal(
 
   std::string line;
   std::set<std::string> matches;
-  std::string full_prefix = prefix.empty() ? "" : (prefix + ":");
   while (std::getline(symbol_stream, line))
   {
     if (ignore_trailing_module && line.size() && line[line.size() - 1] == ']')
     {
       if (size_t idx = line.rfind(" ["); idx != std::string::npos)
         line = line.substr(0, idx);
-    }
-
-    if (!full_prefix.empty())
-    {
-      if (line.find(full_prefix, 0) != 0)
-        continue;
-      line = line.substr(full_prefix.length());
     }
 
     if (!wildcard_match(line, tokens, start_wildcard, end_wildcard))
@@ -224,7 +215,9 @@ int BPFtrace::add_probe(ast::Probe &p)
 
     std::vector<std::string> attach_funcs;
     bool underspecified_usdt_probe = (probetype(attach_point->provider) == ProbeType::usdt  && attach_point->ns.empty());
-    if (attach_point->need_expansion && (has_wildcard(attach_point->func) || underspecified_usdt_probe))
+    if (attach_point->need_expansion &&
+        (has_wildcard(attach_point->func) ||
+         has_wildcard(attach_point->target) || underspecified_usdt_probe))
     {
       std::set<std::string> matches;
       try
@@ -263,6 +256,8 @@ int BPFtrace::add_probe(ast::Probe &p)
     {
       if (probetype(attach_point->provider) == ProbeType::usdt && !attach_point->ns.empty())
         attach_funcs.push_back(attach_point->ns + ":" + attach_point->func);
+      else if (probetype(attach_point->provider) == ProbeType::tracepoint)
+        attach_funcs.push_back(attach_point->target + ":" + attach_point->func);
       else
         attach_funcs.push_back(attach_point->func);
     }
@@ -270,27 +265,34 @@ int BPFtrace::add_probe(ast::Probe &p)
     for (const auto &func : attach_funcs)
     {
       std::string func_id = func;
+      std::string target = attach_point->target;
 
       // USDT probes must specify both a provider and a function name for full id
       // So we will extract out the provider namespace to get just the function name
       if (probetype(attach_point->provider) == ProbeType::usdt )
       {
-        std::string ns = func_id.substr(0, func_id.find(":"));
-        func_id.erase(0, func_id.find(":")+1);
+        std::string ns = erase_prefix(func_id);
         // Set attach_point ns to be a resolved namespace in case of wildcard
         attach_point->ns = ns;
         // Set the function name to be a resolved function id in case of wildcard
         attach_point->func = func_id;
       }
+      else if (probetype(attach_point->provider) == ProbeType::tracepoint)
+      {
+        // tracepoint probes must specify both a target and a function name
+        // We extract the target from func_id so that a resolved target and a
+        // resolved function name are used in the probe.
+        target = erase_prefix(func_id);
+      }
 
       Probe probe;
-      probe.path = attach_point->target;
+      probe.path = target;
       probe.attach_point = func_id;
       probe.type = probetype(attach_point->provider);
       probe.log_size = log_size_;
       probe.orig_name = p.name();
       probe.ns = attach_point->ns;
-      probe.name = attach_point->name(func_id);
+      probe.name = attach_point->name(target, func_id);
       probe.freq = attach_point->freq;
       probe.address = attach_point->address;
       probe.func_offset = attach_point->func_offset;
@@ -330,7 +332,7 @@ std::set<std::string> BPFtrace::find_wildcard_matches(
 {
   std::unique_ptr<std::istream> symbol_stream;
   bool ignore_trailing_module = false;
-  std::string prefix, func;
+  std::string func;
 
   switch (probetype(attach_point.provider))
   {
@@ -339,7 +341,6 @@ std::set<std::string> BPFtrace::find_wildcard_matches(
     {
       symbol_stream = get_symbols_from_file(
           "/sys/kernel/debug/tracing/available_filter_functions");
-      prefix = "";
       func = attach_point.func;
       ignore_trailing_module = true;
       break;
@@ -349,7 +350,6 @@ std::set<std::string> BPFtrace::find_wildcard_matches(
     {
       symbol_stream = std::make_unique<std::istringstream>(
           extract_func_symbols_from_path(attach_point.target));
-      prefix = "";
       func = attach_point.func;
       break;
     }
@@ -357,14 +357,12 @@ std::set<std::string> BPFtrace::find_wildcard_matches(
     {
       symbol_stream = get_symbols_from_file(
           "/sys/kernel/debug/tracing/available_events");
-      prefix = attach_point.target;
-      func = attach_point.func;
+      func = attach_point.target + ":" + attach_point.func;
       break;
     }
     case ProbeType::usdt:
     {
       symbol_stream = get_symbols_from_usdt(pid(), attach_point.target);
-      prefix = "";
       if (attach_point.ns == "")
         func = "*:" + attach_point.func;
       else
@@ -384,8 +382,9 @@ std::set<std::string> BPFtrace::find_wildcard_matches(
     }
   }
 
-  return find_wildcard_matches_internal(
-      prefix, func, ignore_trailing_module, *symbol_stream);
+  return find_wildcard_matches_internal(func,
+                                        ignore_trailing_module,
+                                        *symbol_stream);
 }
 
 std::set<std::string> BPFtrace::find_symbol_matches(
@@ -652,36 +651,29 @@ std::vector<std::unique_ptr<IPrintable>> BPFtrace::get_arg_values(const std::vec
     switch (arg.type.type)
     {
       case Type::integer:
-        // If no casting is performed, we have already promoted the ty.size to 8
-        if (arg.type.cast_type == "" || arg.type.cast_type == "uint64" ||
-            arg.type.cast_type == "int64")
+        switch (arg.type.size)
         {
-          arg_values.push_back(std::make_unique<PrintableInt>(
-              *reinterpret_cast<uint64_t *>(arg_data + arg.offset)));
-        }
-        else if (arg.type.cast_type == "uint32" ||
-                 arg.type.cast_type == "int32")
-        {
-          arg_values.push_back(std::make_unique<PrintableInt>(
-              *reinterpret_cast<uint32_t *>(arg_data + arg.offset)));
-        }
-        else if (arg.type.cast_type == "uint16" ||
-                 arg.type.cast_type == "int16")
-        {
-          arg_values.push_back(std::make_unique<PrintableInt>(
-              *reinterpret_cast<uint16_t *>(arg_data + arg.offset)));
-        }
-        else if (arg.type.cast_type == "uint8" || arg.type.cast_type == "int8")
-        {
-          arg_values.push_back(std::make_unique<PrintableInt>(
-              *reinterpret_cast<uint8_t *>(arg_data + arg.offset)));
-        }
-        else
-        {
-          std::cerr << "get_arg_values: invalid integer size. 8, 4, 2 and byte "
-                       "supported. "
-                    << arg.type.size << "provided" << std::endl;
-          abort();
+          case 8:
+            arg_values.push_back(std::make_unique<PrintableInt>(
+                *reinterpret_cast<uint64_t *>(arg_data + arg.offset)));
+            break;
+          case 4:
+            arg_values.push_back(std::make_unique<PrintableInt>(
+                *reinterpret_cast<uint32_t *>(arg_data + arg.offset)));
+            break;
+          case 2:
+            arg_values.push_back(std::make_unique<PrintableInt>(
+                *reinterpret_cast<uint16_t *>(arg_data + arg.offset)));
+            break;
+          case 1:
+            arg_values.push_back(std::make_unique<PrintableInt>(
+                *reinterpret_cast<uint8_t *>(arg_data + arg.offset)));
+            break;
+          default:
+            std::cerr << "get_arg_values: invalid integer size. 8, 4, 2 and "
+                         "byte supported. "
+                      << arg.type.size << "provided" << std::endl;
+            abort();
         }
         break;
       case Type::string:
@@ -752,13 +744,10 @@ std::vector<std::unique_ptr<IPrintable>> BPFtrace::get_arg_values(const std::vec
                 reinterpret_cast<AsyncEvent::Strftime *>(arg_data + arg.offset)
                     ->nsecs_since_boot)));
         break;
-      case Type::cast:
-        if (arg.type.is_pointer) {
-          arg_values.push_back(
-            std::make_unique<PrintableInt>(
-              *reinterpret_cast<uint64_t*>(arg_data+arg.offset)));
-          break;
-        }
+      case Type::pointer:
+        arg_values.push_back(std::make_unique<PrintableInt>(
+            *reinterpret_cast<uint64_t *>(arg_data + arg.offset)));
+        break;
         // fall through
       default:
         std::cerr << "invalid argument type" << std::endl;

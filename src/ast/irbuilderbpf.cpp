@@ -175,6 +175,14 @@ llvm::Type *IRBuilderBPF::GetType(const SizedType &stype)
 
     ty = GetStructType(ty_name.str(), llvm_elems, true);
   }
+  else if (stype.IsPtrTy())
+  {
+    ty = getInt64Ty();
+  }
+  else if (stype.IsRecordTy())
+  {
+    ty = ArrayType::get(getInt8Ty(), stype.size);
+  }
   else
   {
     switch (stype.size)
@@ -202,10 +210,25 @@ llvm::Type *IRBuilderBPF::GetType(const SizedType &stype)
   return ty;
 }
 
+CallInst *IRBuilderBPF::createCall(Value *callee,
+                                   ArrayRef<Value *> args,
+                                   const Twine &Name)
+{
+#if LLVM_VERSION_MAJOR >= 11
+  auto *calleePtrType = cast<PointerType>(callee->getType());
+  auto *calleeType = cast<FunctionType>(calleePtrType->getElementType());
+  return CreateCall(calleeType, callee, args, Name);
+#else
+  return CreateCall(callee, args, Name);
+#endif
+}
+
 CallInst *IRBuilderBPF::CreateBpfPseudoCall(int mapfd)
 {
   Function *pseudo_func = module_.getFunction("llvm.bpf.pseudo");
-  return CreateCall(pseudo_func, {getInt64(BPF_PSEUDO_MAP_FD), getInt64(mapfd)}, "pseudo");
+  return createCall(pseudo_func,
+                    { getInt64(BPF_PSEUDO_MAP_FD), getInt64(mapfd) },
+                    "pseudo");
 }
 
 CallInst *IRBuilderBPF::CreateBpfPseudoCall(Map &map)
@@ -228,7 +251,7 @@ CallInst *IRBuilderBPF::createMapLookup(int mapfd, AllocaInst *key)
       Instruction::IntToPtr,
       getInt64(libbpf::BPF_FUNC_map_lookup_elem),
       lookup_func_ptr_type);
-  return CreateCall(lookup_func, { map_ptr, key }, "lookup_elem");
+  return createCall(lookup_func, { map_ptr, key }, "lookup_elem");
 }
 
 CallInst *IRBuilderBPF::CreateGetJoinMap(Value *ctx, const location &loc)
@@ -328,7 +351,7 @@ void IRBuilderBPF::CreateMapUpdateElem(Value *ctx,
       Instruction::IntToPtr,
       getInt64(libbpf::BPF_FUNC_map_update_elem),
       update_func_ptr_type);
-  CallInst *call = CreateCall(update_func,
+  CallInst *call = createCall(update_func,
                               { map_ptr, key, val, flags },
                               "update_elem");
   CreateHelperErrorCond(ctx, call, libbpf::BPF_FUNC_map_update_elem, loc);
@@ -352,7 +375,7 @@ void IRBuilderBPF::CreateMapDeleteElem(Value *ctx,
       Instruction::IntToPtr,
       getInt64(libbpf::BPF_FUNC_map_delete_elem),
       delete_func_ptr_type);
-  CallInst *call = CreateCall(delete_func, { map_ptr, key }, "delete_elem");
+  CallInst *call = createCall(delete_func, { map_ptr, key }, "delete_elem");
   CreateHelperErrorCond(ctx, call, libbpf::BPF_FUNC_map_delete_elem, loc);
 }
 
@@ -384,7 +407,7 @@ void IRBuilderBPF::CreateProbeRead(Value *ctx,
       Instruction::IntToPtr,
       getInt64(libbpf::BPF_FUNC_probe_read),
       proberead_func_ptr_type);
-  CallInst *call = CreateCall(proberead_func, { dst, size, src }, "probe_read");
+  CallInst *call = createCall(proberead_func, { dst, size, src }, "probe_read");
   CreateHelperErrorCond(ctx, call, libbpf::BPF_FUNC_probe_read, loc);
 }
 
@@ -419,7 +442,7 @@ CallInst *IRBuilderBPF::CreateProbeReadStr(Value *ctx,
 {
   assert(ctx && ctx->getType() == getInt8PtrTy());
   Constant *fn = createProbeReadStrFn(dst->getType(), src->getType());
-  CallInst *call = CreateCall(fn,
+  CallInst *call = createCall(fn,
                               { dst, getInt32(size), src },
                               "probe_read_str");
   CreateHelperErrorCond(ctx, call, libbpf::BPF_FUNC_probe_read_str, loc);
@@ -440,7 +463,7 @@ CallInst *IRBuilderBPF::CreateProbeReadStr(Value *ctx,
   auto *size_i32 = CreateIntCast(size, getInt32Ty(), false);
 
   Constant *fn = createProbeReadStrFn(dst->getType(), src->getType());
-  CallInst *call = CreateCall(fn, { dst, size_i32, src }, "probe_read_str");
+  CallInst *call = createCall(fn, { dst, size_i32, src }, "probe_read_str");
   CreateHelperErrorCond(ctx, call, libbpf::BPF_FUNC_probe_read_str, loc);
   return call;
 }
@@ -723,7 +746,7 @@ CallInst *IRBuilderBPF::CreateGetNs()
       Instruction::IntToPtr,
       getInt64(libbpf::BPF_FUNC_ktime_get_ns),
       gettime_func_ptr_type);
-  return CreateCall(gettime_func, {}, "get_ns");
+  return createCall(gettime_func, {}, "get_ns");
 }
 
 CallInst *IRBuilderBPF::CreateGetPidTgid()
@@ -736,7 +759,7 @@ CallInst *IRBuilderBPF::CreateGetPidTgid()
       Instruction::IntToPtr,
       getInt64(libbpf::BPF_FUNC_get_current_pid_tgid),
       getpidtgid_func_ptr_type);
-  return CreateCall(getpidtgid_func, {}, "get_pid_tgid");
+  return createCall(getpidtgid_func, {}, "get_pid_tgid");
 }
 
 CallInst *IRBuilderBPF::CreateGetCurrentCgroupId()
@@ -750,7 +773,7 @@ CallInst *IRBuilderBPF::CreateGetCurrentCgroupId()
       Instruction::IntToPtr,
       getInt64(libbpf::BPF_FUNC_get_current_cgroup_id),
       getcgroupid_func_ptr_type);
-  return CreateCall(getcgroupid_func, {}, "get_cgroup_id");
+  return createCall(getcgroupid_func, {}, "get_cgroup_id");
 }
 
 CallInst *IRBuilderBPF::CreateGetUidGid()
@@ -763,7 +786,7 @@ CallInst *IRBuilderBPF::CreateGetUidGid()
       Instruction::IntToPtr,
       getInt64(libbpf::BPF_FUNC_get_current_uid_gid),
       getuidgid_func_ptr_type);
-  return CreateCall(getuidgid_func, {}, "get_uid_gid");
+  return createCall(getuidgid_func, {}, "get_uid_gid");
 }
 
 CallInst *IRBuilderBPF::CreateGetCpuId()
@@ -776,7 +799,7 @@ CallInst *IRBuilderBPF::CreateGetCpuId()
       Instruction::IntToPtr,
       getInt64(libbpf::BPF_FUNC_get_smp_processor_id),
       getcpuid_func_ptr_type);
-  return CreateCall(getcpuid_func, {}, "get_cpu_id");
+  return createCall(getcpuid_func, {}, "get_cpu_id");
 }
 
 CallInst *IRBuilderBPF::CreateGetCurrentTask()
@@ -789,7 +812,7 @@ CallInst *IRBuilderBPF::CreateGetCurrentTask()
       Instruction::IntToPtr,
       getInt64(libbpf::BPF_FUNC_get_current_task),
       getcurtask_func_ptr_type);
-  return CreateCall(getcurtask_func, {}, "get_cur_task");
+  return createCall(getcurtask_func, {}, "get_cur_task");
 }
 
 CallInst *IRBuilderBPF::CreateGetRandom()
@@ -802,7 +825,7 @@ CallInst *IRBuilderBPF::CreateGetRandom()
       Instruction::IntToPtr,
       getInt64(libbpf::BPF_FUNC_get_prandom_u32),
       getrandom_func_ptr_type);
-  return CreateCall(getrandom_func, {}, "get_random");
+  return createCall(getrandom_func, {}, "get_random");
 }
 
 CallInst *IRBuilderBPF::CreateGetStackId(Value *ctx,
@@ -832,7 +855,7 @@ CallInst *IRBuilderBPF::CreateGetStackId(Value *ctx,
       Instruction::IntToPtr,
       getInt64(libbpf::BPF_FUNC_get_stackid),
       getstackid_func_ptr_type);
-  CallInst *call = CreateCall(getstackid_func,
+  CallInst *call = createCall(getstackid_func,
                               { ctx, map_ptr, flags_val },
                               "get_stackid");
   CreateHelperErrorCond(ctx, call, libbpf::BPF_FUNC_get_stackid, loc);
@@ -858,7 +881,7 @@ void IRBuilderBPF::CreateGetCurrentComm(Value *ctx,
       Instruction::IntToPtr,
       getInt64(libbpf::BPF_FUNC_get_current_comm),
       getcomm_func_ptr_type);
-  CallInst *call = CreateCall(getcomm_func,
+  CallInst *call = createCall(getcomm_func,
                               { buf, getInt64(size) },
                               "get_comm");
   CreateHelperErrorCond(ctx, call, libbpf::BPF_FUNC_get_current_comm, loc);
@@ -889,7 +912,9 @@ void IRBuilderBPF::CreatePerfEventOutput(Value *ctx, Value *data, size_t size)
       Instruction::IntToPtr,
       getInt64(libbpf::BPF_FUNC_perf_event_output),
       perfoutput_func_ptr_type);
-  CreateCall(perfoutput_func, {ctx, map_ptr, flags_val, data, size_val}, "perf_event_output");
+  createCall(perfoutput_func,
+             { ctx, map_ptr, flags_val, data, size_val },
+             "perf_event_output");
 }
 
 void IRBuilderBPF::CreateSignal(Value *ctx, Value *sig, const location &loc)
@@ -905,7 +930,7 @@ void IRBuilderBPF::CreateSignal(Value *ctx, Value *sig, const location &loc)
       Instruction::IntToPtr,
       getInt64(libbpf::BPF_FUNC_send_signal),
       signal_func_ptr_type);
-  CallInst *call = CreateCall(signal_func, { sig }, "signal");
+  CallInst *call = createCall(signal_func, { sig }, "signal");
   CreateHelperErrorCond(ctx, call, libbpf::BPF_FUNC_send_signal, loc);
 }
 
@@ -919,7 +944,7 @@ void IRBuilderBPF::CreateOverrideReturn(Value *ctx, Value *rc)
   Constant *override_func = ConstantExpr::getCast(Instruction::IntToPtr,
       getInt64(libbpf::BPF_FUNC_override_return),
       override_func_ptr_type);
-  CreateCall(override_func, { ctx, rc }, "override");
+  createCall(override_func, { ctx, rc }, "override");
 }
 
 Value *IRBuilderBPF::CreatKFuncArg(Value *ctx,
