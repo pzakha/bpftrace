@@ -2,6 +2,7 @@
 #include <cassert>
 #include <iostream>
 
+#include "log.h"
 #include "types.h"
 
 namespace bpftrace {
@@ -9,6 +10,18 @@ namespace bpftrace {
 std::ostream &operator<<(std::ostream &os, Type type)
 {
   os << typestr(type);
+  return os;
+}
+
+std::ostream &operator<<(std::ostream &os, AddrSpace as)
+{
+  os << addrspacestr(as);
+  return os;
+}
+
+std::ostream &operator<<(std::ostream &os, ProbeType type)
+{
+  os << probetypeName(type);
   return os;
 }
 
@@ -110,6 +123,24 @@ bool SizedType::IsStack() const
   return type == Type::ustack || type == Type::kstack;
 }
 
+std::string addrspacestr(AddrSpace as)
+{
+  switch (as)
+  {
+    case AddrSpace::kernel:
+      return "kernel";
+      break;
+    case AddrSpace::user:
+      return "user";
+      break;
+    case AddrSpace::none:
+      return "none";
+      break;
+  }
+
+  return {}; // unreached
+}
+
 std::string typestr(Type t)
 {
   switch (t)
@@ -142,10 +173,9 @@ std::string typestr(Type t)
     case Type::tuple:    return "tuple";    break;
     case Type::timestamp:return "timestamp";break;
     // clang-format on
-    default:
-      std::cerr << "call or probe type not found" << std::endl;
-      abort();
   }
+
+  return {}; // unreached
 }
 
 ProbeType probetype(const std::string &probeName)
@@ -198,10 +228,9 @@ std::string probetypeName(ProbeType t)
     case ProbeType::watchpoint:  return "watchpoint";  break;
     case ProbeType::kfunc:       return "kfunc";       break;
     case ProbeType::kretfunc:    return "kretfunc";    break;
-    default:
-      std::cerr << "probe type not found" << std::endl;
-      abort();
   }
+
+  return {}; // unreached
 }
 
 uint64_t asyncactionint(AsyncAction a)
@@ -216,8 +245,16 @@ SizedType CreateInteger(size_t bits, bool is_signed)
   // analysis when we're inferring types, the first pass may not have
   // enough information to figure out the exact size of the integer. Later
   // passes infer the exact size.
-  assert(bits == 0 || bits == 8 || bits == 16 || bits == 32 || bits == 64);
-  return SizedType(Type::integer, bits / 8, is_signed);
+  assert(bits == 0 || bits == 1 || bits == 8 || bits == 16 || bits == 32 ||
+         bits == 64);
+  auto t = SizedType(Type::integer, bits / 8, is_signed);
+  t.size_bits = bits;
+  return t;
+}
+
+SizedType CreateBool(void)
+{
+  return CreateInteger(1, false);
 }
 
 SizedType CreateInt(size_t bits)
@@ -293,11 +330,12 @@ SizedType CreateArray(size_t num_elements, const SizedType &element_type)
   return ty;
 }
 
-SizedType CreatePointer(const SizedType &pointee_type)
+SizedType CreatePointer(const SizedType &pointee_type, AddrSpace as)
 {
   // Pointer itself is always an uint64
   auto ty = SizedType(Type::pointer, 8);
   ty.element_type_ = new SizedType(pointee_type);
+  ty.SetAS(as);
   return ty;
 }
 

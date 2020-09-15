@@ -22,6 +22,14 @@ and this project adheres to
   - [#1416](https://github.com/iovisor/bpftrace/pull/1416)
 - Add an option to disable warning messages
   - [#1444](https://github.com/iovisor/bpftrace/pull/1444)
+- Support scientific notation for integer literals
+  - [#1476](https://github.com/iovisor/bpftrace/pull/1476)
+- List retprobes
+  - [#1484](https://github.com/iovisor/bpftrace/pull/1484)
+- Resolve unknown typedefs using BTF and give a hint when a type cannot be found
+  - [#1485](https://github.com/iovisor/bpftrace/pull/1485)
+- Support multi-matched globbed targets for uprobe and ustd probes
+  - [#1499](https://github.com/iovisor/bpftrace/pull/1499)
 
 #### Changed
 - Warn if using `print` on `stats` maps with top and div arguments
@@ -30,6 +38,10 @@ and this project adheres to
   - [#1439](https://github.com/iovisor/bpftrace/pull/1439)
 - Improve error messages for kfunc probe types
   - [#1451](https://github.com/iovisor/bpftrace/pull/1451)
+- Better handling of empty usdt namespaces
+  - [#1486](https://github.com/iovisor/bpftrace/pull/1486)
+- Switch `nsecs` to `ktime_get_boot_ns`
+  - [#1475](https://github.com/iovisor/bpftrace/pull/1475)
 
 #### Deprecated
 
@@ -48,6 +60,10 @@ and this project adheres to
   - [#1450](https://github.com/iovisor/bpftrace/pull/1450)
 
 #### Tools
+- Hook up execsnoop.bt script onto `execveat` call
+  - [#1490](https://github.com/iovisor/bpftrace/pull/1490)
+- Support new capabilities for capable.bt
+  - [#1498](https://github.com/iovisor/bpftrace/pull/1498)
 
 #### Documentation
 

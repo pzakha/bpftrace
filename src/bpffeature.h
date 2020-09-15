@@ -59,7 +59,7 @@ public:
   // don't work. Move works but doesn't make sense as the `has_*` functions
   // will just reassign the unique_ptr.
   // A single bpffeature should be constructed in main() and passed around,
-  // making these as deleted to avoid accidentally copying/moving it.
+  // marking these as deleted to avoid accidentally copying/moving it.
   BPFfeature(const BPFfeature&) = delete;
   BPFfeature& operator=(const BPFfeature&) = delete;
   BPFfeature(BPFfeature&&) = delete;
@@ -68,6 +68,7 @@ public:
   int instruction_limit();
   bool has_loop();
   bool has_btf();
+  bool has_map_batch();
 
   std::string report(void);
 
@@ -86,6 +87,7 @@ public:
   DEFINE_HELPER_TEST(probe_read_kernel, libbpf::BPF_PROG_TYPE_KPROBE);
   DEFINE_HELPER_TEST(probe_read_user_str, libbpf::BPF_PROG_TYPE_KPROBE);
   DEFINE_HELPER_TEST(probe_read_kernel_str, libbpf::BPF_PROG_TYPE_KPROBE);
+  DEFINE_HELPER_TEST(ktime_get_boot_ns, libbpf::BPF_PROG_TYPE_KPROBE);
   DEFINE_PROG_TEST(kprobe, libbpf::BPF_PROG_TYPE_KPROBE);
   DEFINE_PROG_TEST(tracepoint, libbpf::BPF_PROG_TYPE_TRACEPOINT);
   DEFINE_PROG_TEST(perf_event, libbpf::BPF_PROG_TYPE_PERF_EVENT);
@@ -94,6 +96,7 @@ public:
 protected:
   std::optional<bool> has_loop_;
   std::optional<int> insns_limit_;
+  std::optional<bool> has_map_batch_;
 
 private:
   bool detect_map(enum libbpf::bpf_map_type map_type);

@@ -57,6 +57,11 @@ endif(LIBBPF_BTF_DUMP_FOUND)
 if (LIBBPF_FOUND)
   target_compile_definitions(bpftrace PRIVATE HAVE_LIBBPF)
 endif(LIBBPF_FOUND)
+
+if (HAVE_LIBBPF_MAP_BATCH)
+  target_compile_definitions(bpftrace PRIVATE HAVE_LIBBPF_MAP_BATCH)
+endif()
+
 if (HAVE_BCC_KFUNC)
   target_compile_definitions(bpftrace PRIVATE HAVE_BCC_KFUNC)
 endif(HAVE_BCC_KFUNC)
@@ -107,6 +112,12 @@ if(STATIC_LINKING)
 else()
   target_link_libraries(bpftrace ${LIBELF_LIBRARIES})
 endif(STATIC_LINKING)
+
+# Support for std::filesystem
+# GCC version <9 and Clang (all versions) require -lstdc++fs
+if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" OR ${CMAKE_CXX_COMPILER_VERSION} VERSION_LESS "9")
+  target_link_libraries(bpftrace "stdc++fs")
+endif()
 
 if (BUILD_ASAN)
   if(${CMAKE_VERSION} VERSION_LESS "3.13.0")

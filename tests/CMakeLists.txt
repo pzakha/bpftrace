@@ -58,6 +58,10 @@ add_executable(bpftrace_test
   ${BFD_DISASM_SRC}
 )
 
+if (HAVE_LIBBPF_MAP_BATCH)
+  target_compile_definitions(bpftrace_test PRIVATE HAVE_LIBBPF_MAP_BATCH)
+endif()
+
 if(HAVE_NAME_TO_HANDLE_AT)
   target_compile_definitions(bpftrace_test PRIVATE HAVE_NAME_TO_HANDLE_AT=1)
 endif(HAVE_NAME_TO_HANDLE_AT)
@@ -125,6 +129,12 @@ if (STATIC_LINKING)
 else()
   target_link_libraries(bpftrace_test ${LIBELF_LIBRARIES})
 endif(STATIC_LINKING)
+
+# Support for std::filesystem
+# GCC version <9 and Clang (all versions) require -lstdc++fs
+if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" OR ${CMAKE_CXX_COMPILER_VERSION} VERSION_LESS "9")
+  target_link_libraries(bpftrace_test "stdc++fs")
+endif()
 
 find_package(Threads REQUIRED)
 
