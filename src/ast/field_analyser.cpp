@@ -268,7 +268,7 @@ bool FieldAnalyser::resolve_args(AttachPoint &ap)
     }
     catch (const WildcardException &e)
     {
-      std::cerr << e.what() << std::endl;
+      LOG(ERROR) << e.what();
       return false;
     }
 
@@ -357,6 +357,9 @@ void FieldAnalyser::visit(AttachPoint &ap)
       for (const auto& arg : ap_args_)
       {
         auto stype = arg.second;
+
+        if (stype.IsPtrTy())
+          stype = *stype.GetPointeeTy();
 
         if (stype.IsRecordTy())
           bpftrace_.btf_set_.insert(stype.GetName());

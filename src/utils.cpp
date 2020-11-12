@@ -1,21 +1,40 @@
-#include <cstring>
-
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstring>
 #include <fcntl.h>
 #include <fstream>
 #include <glob.h>
+#include <link.h>
 #include <map>
 #include <memory>
+#include <regex>
 #include <sstream>
 #include <string>
+#include <sys/auxv.h>
 #include <sys/stat.h>
 #include <tuple>
 #include <unistd.h>
 
 #include "list.h"
+#include "log.h"
 #include "utils.h"
 #include <bcc/bcc_elf.h>
+#include <bcc/bcc_syms.h>
+#include <bcc/bcc_usdt.h>
+#include <elf.h>
+
+#include <linux/version.h>
+
+#if __has_include(<filesystem>)
+#include <filesystem>
+namespace std_filesystem = std::filesystem;
+#elif __has_include(<experimental/filesystem>)
+#include <experimental/filesystem>
+namespace std_filesystem = std::experimental::filesystem;
+#else
+#error "neither <filesystem> nor <experimental/filesystem> are present"
+#endif
 
 namespace {
 
@@ -121,7 +140,8 @@ bool get_uint64_env_var(const std::string &str, uint64_t &dest)
     std::istringstream stringstream(env_p);
     if (!(stringstream >> dest))
     {
-      std::cerr << "Env var '" << str << "' did not contain a valid uint64_t, or was zero-valued." << std::endl;
+      LOG(ERROR) << "Env var '" << str
+                 << "' did not contain a valid uint64_t, or was zero-valued.";
       return false;
     }
   }
@@ -424,8 +444,9 @@ const std::string &is_deprecated(const std::string &str)
     {
       if (item->show_warning)
       {
-        std::cerr << "warning: " << item->old_name << " is deprecated and will be removed in the future. ";
-        std::cerr << "Use " << item->new_name << " instead." << std::endl;
+        LOG(WARNING) << item->old_name
+                     << " is deprecated and will be removed in the future. Use "
+                     << item->new_name << " instead.";
         item->show_warning = false;
       }
 
@@ -642,8 +663,8 @@ void cat_file(const char *filename, size_t max_bytes, std::ostream &out)
   const size_t BUFSIZE = 4096;
 
   if (file.fail()){
-    std::cerr << "Error opening file '" << filename << "': ";
-    std::cerr << strerror(errno) << std::endl;
+    LOG(ERROR) << "failed to open file '" << filename
+               << "': " << strerror(errno);
     return;
   }
 
@@ -659,8 +680,8 @@ void cat_file(const char *filename, size_t max_bytes, std::ostream &out)
       return;
     }
     if (file.fail()) {
-      std::cerr << "Error opening file '" << filename << "': ";
-      std::cerr << strerror(errno) << std::endl;
+      LOG(ERROR) << "failed to open file '" << filename
+                 << "': " << strerror(errno);
       return;
     }
     bytes_read += file.gcount();
@@ -773,6 +794,138 @@ std::unordered_set<std::string> get_traceable_funcs()
   while (std::getline(available_funs, line))
     result.insert(line);
   return result;
+}
+
+uint64_t parse_exponent(const char *str)
+{
+  char *e_offset;
+  auto base = strtoll(str, &e_offset, 10);
+
+  if (*e_offset != 'e')
+    return base;
+
+  auto exp = strtoll(e_offset + 1, nullptr, 10);
+  auto num = base * std::pow(10, exp);
+  return num;
+}
+
+/**
+ * Search for LINUX_VERSION_CODE in the vDSO, returning 0 if it can't be found.
+ */
+static uint32_t _find_version_note(unsigned long base)
+{
+  auto ehdr = reinterpret_cast<const ElfW(Ehdr) *>(base);
+
+  for (int i = 0; i < ehdr->e_shnum; i++)
+  {
+    auto shdr = reinterpret_cast<const ElfW(Shdr) *>(base + ehdr->e_shoff +
+                                                     (i * ehdr->e_shentsize));
+
+    if (shdr->sh_type == SHT_NOTE)
+    {
+      auto ptr = reinterpret_cast<const char *>(base + shdr->sh_offset);
+      auto end = ptr + shdr->sh_size;
+
+      while (ptr < end)
+      {
+        auto nhdr = reinterpret_cast<const ElfW(Nhdr) *>(ptr);
+        ptr += sizeof *nhdr;
+
+        auto name = ptr;
+        ptr += (nhdr->n_namesz + sizeof(ElfW(Word)) - 1) & -sizeof(ElfW(Word));
+
+        auto desc = ptr;
+        ptr += (nhdr->n_descsz + sizeof(ElfW(Word)) - 1) & -sizeof(ElfW(Word));
+
+        if ((nhdr->n_namesz > 5 && !memcmp(name, "Linux", 5)) &&
+            nhdr->n_descsz == 4 && !nhdr->n_type)
+          return *reinterpret_cast<const uint32_t *>(desc);
+      }
+    }
+  }
+
+  return 0;
+}
+
+static uint32_t kernel_version_from_vdso(void)
+{
+  // Fetch LINUX_VERSION_CODE from the vDSO .note section, falling back on
+  // the build-time constant if unavailable. This always matches the
+  // running kernel, but is not supported on arm32.
+  unsigned code = 0;
+  unsigned long base = getauxval(AT_SYSINFO_EHDR);
+  if (base && !memcmp(reinterpret_cast<void *>(base), ELFMAG, 4))
+    code = _find_version_note(base);
+  if (!code)
+    code = LINUX_VERSION_CODE;
+  return code;
+}
+
+static uint32_t kernel_version_from_uts(void)
+{
+  struct utsname utsname;
+  if (uname(&utsname) < 0)
+    return 0;
+  unsigned x, y, z;
+  if (sscanf(utsname.release, "%u.%u.%u", &x, &y, &z) != 3)
+    return 0;
+  return KERNEL_VERSION(x, y, z);
+}
+
+static uint32_t kernel_version_from_khdr(void)
+{
+  // Try to get the definition of LINUX_VERSION_CODE at runtime.
+  std::ifstream linux_version_header{ "/usr/include/linux/version.h" };
+  const std::string content{ std::istreambuf_iterator<char>(
+                                 linux_version_header),
+                             std::istreambuf_iterator<char>() };
+  const std::regex regex{ "#define\\s+LINUX_VERSION_CODE\\s+(\\d+)" };
+  std::smatch match;
+
+  if (std::regex_search(content.begin(), content.end(), match, regex))
+    return static_cast<unsigned>(std::stoi(match[1]));
+
+  return 0;
+}
+
+/**
+ * Find a LINUX_VERSION_CODE matching the host kernel. The build-time constant
+ * may not match if bpftrace is compiled on a different Linux version than it's
+ * used on, e.g. if built with Docker.
+ */
+uint32_t kernel_version(int attempt)
+{
+  static std::optional<uint32_t> a0, a1, a2;
+  switch (attempt)
+  {
+    case 0:
+    {
+      if (!a0)
+        a0 = kernel_version_from_vdso();
+      return *a0;
+    }
+    case 1:
+    {
+      if (!a1)
+        a1 = kernel_version_from_uts();
+      return *a1;
+    }
+    case 2:
+    {
+      if (!a2)
+        a2 = kernel_version_from_khdr();
+      return *a2;
+    }
+    default:
+      throw std::runtime_error("BUG: kernel_version(): Invalid attempt: " +
+                               std::to_string(attempt));
+  }
+}
+
+std::string abs_path(const std::string &rel_path)
+{
+  auto p = std_filesystem::path(rel_path);
+  return std_filesystem::canonical(std_filesystem::absolute(p)).string();
 }
 
 } // namespace bpftrace

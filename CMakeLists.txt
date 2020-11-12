@@ -4,7 +4,7 @@ project(bpftrace)
 # bpftrace version number components.
 set(bpftrace_VERSION_MAJOR 0)
 set(bpftrace_VERSION_MINOR 11)
-set(bpftrace_VERSION_PATCH 0)
+set(bpftrace_VERSION_PATCH 2)
 
 include(GNUInstallDirs)
 
@@ -48,8 +48,6 @@ add_compile_options("-Wpointer-arith")
 add_compile_options("-Wcast-align")
 add_compile_options("-Wwrite-strings")
 add_compile_options("-Wcast-qual")
-add_compile_options("-Wswitch-default")
-#add_compile_options("-Wswitch-enum")
 #add_compile_options("-Wconversion")
 add_compile_options("-Wunreachable-code")
 #add_compile_options("-Wformat=2")

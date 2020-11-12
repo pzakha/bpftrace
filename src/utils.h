@@ -150,6 +150,7 @@ bool is_numeric(const std::string &str);
 bool symbol_has_cpp_mangled_signature(const std::string &sym_name);
 pid_t parse_pid(const std::string &str);
 std::string hex_format_buffer(const char *buf, size_t size);
+std::string abs_path(const std::string &rel_path);
 
 // trim from end of string (right)
 inline std::string &rtrim(std::string &s)
@@ -181,4 +182,6 @@ T read_data(const void *src)
   return v;
 }
 
+uint64_t parse_exponent(const char *str);
+uint32_t kernel_version(int attempt);
 } // namespace bpftrace

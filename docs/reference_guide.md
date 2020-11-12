@@ -90,6 +90,7 @@ discussion to other files in /docs, the /tools/\*\_examples.txt files, or blog p
     - [22. `sizeof()`: Size of type or expression](#22-sizeof-size-of-type-or-expression)
     - [23. `print()`: Print Value](#23-print-print-value)
     - [24. `strftime()`: Formatted timestamp](#24-strftime-formatted-timestamp)
+    - [25. `path()`: Return full path](#25-path-return-full-path)
 - [Map Functions](#map-functions)
     - [1. Builtins](#1-builtins-2)
     - [2. `count()`: Count](#2-count-count)
@@ -299,7 +300,6 @@ If BTF is available, it is also possible to list struct/union/emum definitions. 
 
 ```
 # bpftrace -lv "struct path"
-BTF: using data from /sys/kernel/btf/vmlinux
 struct path {
         struct vfsmount *mnt;
         struct dentry *dentry;
@@ -366,7 +366,7 @@ The `-v` option prints more information about the program as it is run:
 # bpftrace -v -e 'tracepoint:syscalls:sys_enter_nanosleep { printf("%s is sleeping.\n", comm); }'
 Attaching 1 probe...
 
-Bytecode:
+The verifier log:
 0: (bf) r6 = r1
 1: (b7) r1 = 0
 2: (7b) *(u64 *)(r10 -24) = r1
@@ -402,7 +402,7 @@ iscsid is sleeping.
 [...]
 ```
 
-This includes `Bytecode:` and then the eBPF bytecode after it was compiled from the llvm assembly.
+This includes `The verifier log:` and then the log message from the in-kernel vertifier.
 
 ## 7. Preprocessor Options
 
@@ -807,7 +807,7 @@ The `return` keyword is used to exit the current probe. This differs from
 
 N-tuples are supported, where N is any integer greater than 1.
 
-Indexing is supported using the `.` operator.
+Indexing is supported using the `.` operator. Tuples are immutable once created.
 
 Example:
 
@@ -833,6 +833,9 @@ Attaching 1 probe...
 
 Some probe types allow wildcards to match multiple probes, eg, `kprobe:vfs_*`. You may also specify
 multiple attach points for an action block using a comma separated list.
+
+Quoted strings (eg. `uprobe:"/usr/lib/c++lib.so":foo`) may be used to escape
+characters in attach point definitions.
 
 ## 1. `kprobe`/`kretprobe`: Dynamic Tracing, Kernel-Level
 
@@ -1224,7 +1227,7 @@ usdt:library_path:probe_name
 usdt:library_path:[probe_namespace]:probe_name
 ```
 
-Where the `probe_namespace` is optional, and will default to the basename of the binary or library path.
+Where `probe_namespace` is optional if `probe_name` is unique within the binary.
 
 Examples:
 
@@ -1239,25 +1242,43 @@ hi
 ^C
 ```
 
-The basename of a path will be used for the namespace of a probe. If it doesn't match, the probe won't be
-found. In this example, the function name `loop` is in the namespace `tick`. If we rename the binary to
-`tock`, it won't be found:
+The namespace of the probe is deduced automatically. If the binary `/root/tick` contained multiple probes 
+with the name `loop` (e.g. `tick:loop` and `tock:loop`), no probe would be attached. 
+This may be solved by manually specifying the namespace or by using a wildcard:
 
 ```
-mv /root/tick /root/tock
-bpftrace -e 'usdt:/root/tock:loop { printf("hi\n"); }'
+# bpftrace -e 'usdt:/root/tick:loop { printf("hi\n"); }'
+ERROR: namespace for usdt:/root/tick:loop not specified, matched 2 probes
+INFO: please specify a unique namespace or use '*' to attach to all matched probes
+No probes to attach
+
+# bpftrace -e 'usdt:/root/tick:tock:loop { printf("hi\n"); }'
 Attaching 1 probe...
-Error finding location for probe: usdt:/root/tock:loop
+hi
+hi
+^C
+
+# bpftrace -e 'usdt:/root/tick:*:loop { printf("hi\n"); }'
+Attaching 2 probes...
+hi
+hi
+hi
+hi
+^C
 ```
 
-The probe namespace can be manually specified, between the path and probe function name. This allows for
-the probe to be found, regardless of the name of the binary:
+bpftrace also supports USDT semaphores. If both your environment and bpftrace
+support uprobe refcounts, then USDT semaphores are automatically activated for
+all processes upon probe attachment (and `--usdt-file-activation` becomes a
+noop). You can check if your system supports uprobe refcounts by running:
 
 ```
-bpftrace -e 'usdt:/root/tock:tick:loop { printf("hi\n"); }'
+# bpftrace --info 2>&1 | grep "uprobe refcount"
+  bcc bpf_attach_uprobe refcount: yes
+  uprobe refcount (depends on Build:bcc bpf_attach_uprobe refcount): yes
 ```
 
-bpftrace also supports USDT semaphores. You may activate semaphores by passing in `-p $PID` or
+If your system does not support uprobe refcounts, you may activate semaphores by passing in `-p $PID` or
 `--usdt-file-activation`. `--usdt-file-activation` looks through `/proc` to find processes that
 have your probe's binary mapped with executable permissions into their address space and then tries
 to attach your probe. Note that file activation occurs only once (during attach time). In other
@@ -1455,7 +1476,8 @@ Examples in situ:
 
 ## 14. `watchpoint`: Memory watchpoints
 
-**WARNING**: this feature is experimental and may be subject to interface changes.
+**WARNING**: this feature is experimental and may be subject to interface changes. Memory watchpoints are
+also architecture dependant
 
 Syntax:
 
@@ -1464,15 +1486,43 @@ watchpoint::hex_address:length:mode
 ```
 
 These are memory watchpoints provided by the kernel. Whenever a memory address is written to (`w`), read
-from (`r`), or executed (`x`), the kernel can generate an event. Note that a pid (`-p`) or a command
-(`-c`) must be provided to bpftrace. Also note you may not monitor for execution while monitoring read or
-write.
+from (`r`), or executed (`x`), the kernel can generate an event. If you want to add watchpoint for
+an userspace process, a pid (`-p`) or a command (`-c`) must be provided to bpftrace. If not, bpftrace
+will take the address as kernel space address. Also note you may not monitor for execution while
+monitoring read or write.
 
 Examples:
 
 ```
-bpftrace -e 'watchpoint::0x10000000:8:rw { printf("hit!\n"); }' -c ~/binary
+bpftrace -e 'watchpoint::0x10000000:8:rw { printf("hit!\n"); exit(); }' -c ./testprogs/watchpoint
 ```
+
+It will output "hit" and exit when the watchpoint process is trying to read or write 0x10000000.
+
+```
+# bpftrace -e "watchpoint::0x$(awk '$3 == "jiffies" {print $1}' /proc/kallsyms):8:w {@[kstack] = count();}"
+Attaching 1 probe...
+^C
+......
+@[
+    do_timer+12
+    tick_do_update_jiffies64.part.22+89
+    tick_sched_do_timer+103
+    tick_sched_timer+39
+    __hrtimer_run_queues+256
+    hrtimer_interrupt+256
+    smp_apic_timer_interrupt+106
+    apic_timer_interrupt+15
+    cpuidle_enter_state+188
+    cpuidle_enter+41
+    do_idle+536
+    cpu_startup_entry+25
+    start_secondary+355
+    secondary_startup_64+164
+]: 319
+```
+
+It shows the kernel stacks in which jiffies is updated.
 
 ## 15. `kfunc`/`kretfunc`: Kernel Functions Tracing
 
@@ -1852,18 +1902,26 @@ be used as a string in the `str()` call. If a parameter is used that was not pro
 zero for numeric context, and "" for string context. Positional parameters may also be used in probe
 argument and will be treated as a string parameter.
 
+If a positional parameter is used in `str()`, it is interpreted as a pointer to the actual given string 
+literal, which allows to do pointer arithmetic on it. Only addition of a single constant, less or equal to
+the length of the supplied string, is allowed.
+
 `$#` returns the number of positional arguments supplied.
 
 This allows scripts to be written that use basic arguments to change their behavior. If you develop a
 script that requires more complex argument processing, it may be better suited for bcc instead, which
 supports Python's argparse and completely custom argument processing.
 
-One-liner example:
+One-liner examples:
 
 ```
 # bpftrace -e 'BEGIN { printf("I got %d, %s (%d args)\n", $1, str($2), $#); }' 42 "hello"
 Attaching 1 probe...
 I got 42, hello (2 args)
+
+# bpftrace -e 'BEGIN { printf("%s\n", str($1 + 1)) }' "hello"
+Attaching 1 probe...
+ello
 ```
 
 Script example, bsize.d:
@@ -1941,6 +1999,7 @@ Tracing block I/O sizes > 0 bytes
 - `signal(char[] signal | u32 signal)` - Send a signal to the current task
 - `strncmp(char *s1, char *s2, int length)` - Compare first n characters of two strings
 - `override(u64 rc)` - Override return value
+- `path(struct path *path)` - Return full path
 
 Some of these are asynchronous: the kernel queues the event, but some time later (milliseconds) it is
 processed in user-space. The asynchronous actions are: `printf()`, `time()`, and `join()`. Both `ksym()`
@@ -1983,6 +2042,11 @@ This prints the current time using the format string supported by libc `strftime
 ```
 
 If a format string is not provided, it defaults to "%H:%M:%S\n".
+
+Note that this builtin is asynchronous. The printed timestamp is the time at
+which userspace has processed the queued up event, _not_ the time at which the
+bpf prog calls `time()`. For a more precise timestamp, see
+[strftime()](#24-strftime-formatted-timestamp).
 
 ## 4. `join()`: Join
 
@@ -2710,9 +2774,12 @@ Syntax:
 - `strftime(const char *format, int nsecs)`
 
 This returns a formatted timestamp that is printable with `printf`. The format
-string must be supported by `strftime(3)`. Use format specifier "%s" when
-printing the return value. Note that `strftime` does not actually return a
-string in bpf (kernel), the formatting happens in userspace.
+string must be supported by `strftime(3)`. `nsecs` is nanoseconds since boot,
+typically derived from [nsecs](#6-nsecs-timestamps-and-time-deltas).
+
+Use format specifier "%s" when printing the return value. Note that `strftime`
+does not actually return a string in bpf (kernel), the formatting happens in
+userspace.
 
 Examples:
 
@@ -2725,6 +2792,33 @@ Attaching 1 probe...
 13:11:25
 13:11:26
 ^C
+```
+
+## 25. `path()`: Return full path
+
+Syntax:
+- `path(struct path *path)`
+
+Return full path referenced by struct path pointer in argument.
+There's list of allowed kernel functions, that can use this
+helper in probe.
+
+Examples:
+```
+# bpftrace  -e 'kfunc:filp_close { printf("%s\n", path(args->filp->f_path)); }'
+Attaching 1 probe...
+/proc/sys/net/ipv6/conf/eno2/disable_ipv6
+/proc/sys/net/ipv6/conf/eno2/use_tempaddr
+socket:[23276]
+/proc/sys/net/ipv6/conf/eno2/disable_ipv6
+socket:[17655]
+/sys/devices/pci0000:00/0000:00:1c.5/0000:04:00.1/net/eno2/type
+socket:[38745]
+/proc/sys/net/ipv6/conf/eno2/disable_ipv6
+
+# bpftrace  -e 'kretfunc:dentry_open { printf("%s\n", path(retval->f_path)); }'
+Attaching 1 probe...
+/dev/pts/1 -> /dev/pts/1
 ```
 
 # Map Functions

@@ -12,6 +12,7 @@
 #include "bpftrace.h"
 #include "btf.h"
 #include "list.h"
+#include "log.h"
 #include "utils.h"
 
 namespace bpftrace {
@@ -72,7 +73,7 @@ void print_tracepoint_args(const std::string &category, const std::string &event
 
   if (format_file.fail())
   {
-    std::cerr << "ERROR: tracepoint format file not found: " << format_file_path << std::endl;
+    LOG(ERROR) << "tracepoint format file not found: " << format_file_path;
     return;
   }
 
@@ -104,44 +105,41 @@ static void list_uprobes(const BPFtrace& bpftrace,
                          const std::regex& re)
 {
     std::unique_ptr<std::istream> symbol_stream;
-    std::string executable;
-    std::string absolute_exe;
+    // Given path (containing a possible wildcard)
+    std::string path;
     bool show_all = false;
 
     if (bpftrace.pid() > 0)
     {
-      executable = get_pid_exe(bpftrace.pid());
-      absolute_exe = path_for_pid_mountns(bpftrace.pid(), executable);
-    } else if (probe_name == "uprobe")
+      path = get_pid_exe(bpftrace.pid());
+      path = path_for_pid_mountns(bpftrace.pid(), path);
+    }
+    else if (probe_name == "uprobe" || probe_name == "uretprobe")
     {
-      executable = search.substr(search.find(":") + 1, search.size());
-      show_all = executable.find(":") == std::string::npos;
-      executable = executable.substr(0, executable.find(":"));
+      path = search;
+      erase_prefix(path); // remove "u[ret]probe:" prefix
+      show_all = path.find(':') == std::string::npos;
+      path = erase_prefix(path); // extract "path" prefix from "path:fun"
 
-      auto paths = resolve_binary_path(executable);
-      switch (paths.size())
+      auto abs_paths = resolve_binary_path(path);
+      if (abs_paths.empty())
       {
-      case 0:
-        std::cerr << "uprobe target '" << executable << "' does not exist or is not executable" << std::endl;
-        return;
-      case 1:
-        absolute_exe = paths.front();
-        break;
-      default:
-        std::cerr << "path '" << executable << "' must refer to a unique binary but matched " << paths.size() << std::endl;
+        LOG(ERROR) << probe_name << " target '" << path
+                   << "' does not exist or is not executable";
         return;
       }
     }
 
-    if (!executable.empty())
+    if (!path.empty())
     {
       symbol_stream = std::make_unique<std::istringstream>(
-          bpftrace.extract_func_symbols_from_path(absolute_exe));
+          bpftrace.extract_func_symbols_from_path(path));
 
       std::string line;
       while (std::getline(*symbol_stream, line))
       {
-        std::string probe = "uprobe:" + absolute_exe + ":" + line;
+        std::string probe = (probe_name.empty() ? "uprobe" : probe_name) + ":" +
+                            line;
         if (show_all || search.empty() || !search_probe(probe, re))
           std::cout << probe << std::endl;
       }
@@ -154,7 +152,7 @@ static void list_usdt(const BPFtrace& bpftrace,
                       const std::regex& re)
 {
   usdt_probe_list usdt_probes;
-  bool usdt_path_list = false;
+  bool show_all = false;
   if (bpftrace.pid() > 0)
   {
     // PID takes precedence over path, so path from search expression will be
@@ -163,26 +161,26 @@ static void list_usdt(const BPFtrace& bpftrace,
   }
   else if (probe_name == "usdt")
   {
-    // If the *full* path is provided as part of the search expression parse it
-    // out and use it
-    std::string usdt_path = search.substr(search.find(":") + 1, search.size());
-    usdt_path_list = usdt_path.find(":") == std::string::npos;
-    usdt_path = usdt_path.substr(0, usdt_path.find(":"));
+    std::string usdt_path = search;
+    erase_prefix(usdt_path); // remove the "usdt:" prefix;
+    show_all = usdt_path.find(':') == std::string::npos;
+    usdt_path = erase_prefix(usdt_path); // extract "path" from "path:ns:fun"
     auto paths = resolve_binary_path(usdt_path, bpftrace.pid());
-    switch (paths.size())
+    if (!paths.empty())
     {
-      case 0:
-        std::cerr << "usdt target '" << usdt_path
-                  << "' does not exist or is not executable" << std::endl;
-        return;
-      case 1:
-        usdt_probes = USDTHelper::probes_for_path(paths.front());
-        break;
-      default:
-        std::cerr << "usdt target '" << usdt_path
-                  << "' must refer to a unique binary but matched "
-                  << paths.size() << std::endl;
-        return;
+      for (auto& path : paths)
+      {
+        auto path_usdt_probes = USDTHelper::probes_for_path(path);
+        usdt_probes.insert(usdt_probes.end(),
+                           path_usdt_probes.begin(),
+                           path_usdt_probes.end());
+      }
+    }
+    else
+    {
+      LOG(ERROR) << "usdt target '" << usdt_path
+                 << "' does not exist or is not executable";
+      return;
     }
   }
 
@@ -191,8 +189,8 @@ static void list_usdt(const BPFtrace& bpftrace,
     std::string path = usdt_probe.path;
     std::string provider = usdt_probe.provider;
     std::string fname = usdt_probe.name;
-    std::string probe    = "usdt:" + path + ":" + provider + ":" + fname;
-    if (usdt_path_list || search.empty() || !search_probe(probe, re))
+    std::string probe = "usdt:" + path + ":" + provider + ":" + fname;
+    if (show_all || search.empty() || !search_probe(probe, re))
       std::cout << probe << std::endl;
   }
 }
@@ -228,12 +226,14 @@ static void list_tracepoints(const std::string& search, const std::regex& re)
   }
 }
 
-static void list_kprobes(const std::string& search, const std::regex& re)
+static void list_kprobes(const std::string& search,
+                         const std::regex& re,
+                         const bool retprobe = false)
 {
   std::ifstream file(kprobe_path);
   if (file.fail())
   {
-    std::cerr << strerror(errno) << ": " << kprobe_path << std::endl;
+    LOG(ERROR) << strerror(errno) << ": " << kprobe_path;
     return;
   }
 
@@ -242,10 +242,11 @@ static void list_kprobes(const std::string& search, const std::regex& re)
   while (std::getline(file, line))
   {
     loc = line.find_first_of(" ");
+    probe = retprobe ? "kretprobe:" : "kprobe:";
     if (loc == std::string::npos)
-      probe = "kprobe:" + line;
+      probe += line;
     else
-      probe = "kprobe:" + line.substr(0, loc);
+      probe += line.substr(0, loc);
 
     if (!search.empty())
     {
@@ -297,7 +298,7 @@ void list_probes(const BPFtrace& bpftrace, const std::string& search_input)
   }
   catch (std::regex_error& e)
   {
-    std::cerr << "ERROR: invalid character in search expression." << std::endl;
+    LOG(ERROR) << "invalid character in search expression.";
     return;
   }
 
@@ -313,7 +314,7 @@ void list_probes(const BPFtrace& bpftrace, const std::string& search_input)
     list_probes_from_list(HW_PROBE_LIST, "hardware", search, re);
 
   // uprobe
-  if (bpftrace.pid() > 0 || probe_name == "uprobe")
+  if (bpftrace.pid() > 0 || probe_name == "uprobe" || probe_name == "uretprobe")
     list_uprobes(bpftrace, probe_name, search, re);
 
   // usdt
@@ -325,12 +326,13 @@ void list_probes(const BPFtrace& bpftrace, const std::string& search_input)
     list_tracepoints(search, re);
 
   // kprobes
-  if (list_all || probe_name == "kprobe")
-    list_kprobes(search, re);
+  if (list_all || probe_name == "kprobe" || probe_name == "kretprobe")
+    list_kprobes(search, re, probe_name == "kretprobe");
 
   // kfuncs
-  if (list_all || probe_name == "kfunc")
-    bpftrace.btf_.display_kfunc(search.empty() ? nullptr : &re);
+  if (list_all || probe_name == "kfunc" || probe_name == "kretfunc")
+    bpftrace.btf_.display_kfunc(search.empty() ? nullptr : &re,
+                                probe_name == "kretfunc");
 
   // struct / union / enum
   if (probe_name.empty() &&

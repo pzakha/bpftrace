@@ -9,6 +9,8 @@ and this project adheres to
 ## Unreleased
 
 #### Added
+- Add path builtin
+  - [#1492](https://github.com/iovisor/bpftrace/pull/1492)
 - Allow wildcards for tracepoint categories
   - [#1445](https://github.com/iovisor/bpftrace/pull/1445)
 - Add wildcard support for kfunc probe types
@@ -22,6 +24,28 @@ and this project adheres to
   - [#1416](https://github.com/iovisor/bpftrace/pull/1416)
 - Add an option to disable warning messages
   - [#1444](https://github.com/iovisor/bpftrace/pull/1444)
+- Support scientific notation for integer literals
+  - [#1476](https://github.com/iovisor/bpftrace/pull/1476)
+- List retprobes
+  - [#1484](https://github.com/iovisor/bpftrace/pull/1484)
+- Resolve unknown typedefs using BTF and give a hint when a type cannot be found
+  - [#1485](https://github.com/iovisor/bpftrace/pull/1485)
+- Support multi-matched globbed targets for uprobe and ustd probes
+  - [#1499](https://github.com/iovisor/bpftrace/pull/1499)
+- Positional parameters: support numbers as strings and params as string literals
+  - [#1514](https://github.com/iovisor/bpftrace/pull/1514)
+- Support for tracepoint __data_loc fields
+  - [#1542](https://github.com/iovisor/bpftrace/pull/1542)
+- Set addrspace info for various builtins
+  - [#1504](https://github.com/iovisor/bpftrace/pull/1504)
+- Support watchpoint for kernel space address
+  - [#1552](https://github.com/iovisor/bpftrace/pull/1552)
+- Support for pointer to pointer
+  - [#1557](https://github.com/iovisor/bpftrace/pull/1557)
+- Support for uprobe refcounts
+  - [#1567](https://github.com/iovisor/bpftrace/pull/1567)
+- Add basic options and documentations for fuzzing
+  - [#1601](https://github.com/iovisor/bpftrace/pull/1601)
 
 #### Changed
 - Warn if using `print` on `stats` maps with top and div arguments
@@ -30,6 +54,18 @@ and this project adheres to
   - [#1439](https://github.com/iovisor/bpftrace/pull/1439)
 - Improve error messages for kfunc probe types
   - [#1451](https://github.com/iovisor/bpftrace/pull/1451)
+- Better handling of empty usdt namespaces
+  - [#1486](https://github.com/iovisor/bpftrace/pull/1486)
+- Switch `nsecs` to `ktime_get_boot_ns`
+  - [#1475](https://github.com/iovisor/bpftrace/pull/1475)
+- Tracepoint __data_loc fields are renamed from `args->data_loc_name` to `args->name`
+  - [#1542](https://github.com/iovisor/bpftrace/pull/1542)
+- Change a part of the message of '-v' output
+  - [#1553](https://github.com/iovisor/bpftrace/pull/1553)
+- Improve tuple assignment error message
+  - [#1563](https://github.com/iovisor/bpftrace/pull/1563)
+- Remove "BTF: using data from ..." message when using -v flag
+  - [#1554](https://github.com/iovisor/bpftrace/pull/1554)
 
 #### Deprecated
 
@@ -46,11 +82,52 @@ and this project adheres to
   - [#1457](https://github.com/iovisor/bpftrace/pull/1457)
 - Fix type resolution for struct field access via variables
   - [#1450](https://github.com/iovisor/bpftrace/pull/1450)
+- Fix wrong setting of vmlinux_location.raw when offset kprobe used
+  - [#1530](https://github.com/iovisor/bpftrace/pull/1530)
+- Fix pointer arithmetic for positional parameters
+  - [#1514](https://github.com/iovisor/bpftrace/pull/1514)
+- SEGV when using perf format for stacks
+  - [#1524](https://github.com/iovisor/bpftrace/pull/1524)
+- Fix llvm errors of PositonalParameter
+  - [#1565](https://github.com/iovisor/bpftrace/pull/1565)
+- Error if Positional Params num is zero
+  - [#1568](https://github.com/iovisor/bpftrace/issues/1568)
+- Fix LNOT
+  - [#1570](https://github.com/iovisor/bpftrace/pull/1570)
+- Fix invalid cast handling in tuple
+  - [#1572](https://github.com/iovisor/bpftrace/pull/1572)
+- Check string comparison size
+  - [#1573](https://github.com/iovisor/bpftrace/pull/1573)
+- Fix a possible integer overflow
+  - [#1580](https://github.com/iovisor/bpftrace/pull/1580)
+- Printing of small integers with `printf`
+  - [#1532](https://github.com/iovisor/bpftrace/pull/1532)
 
 #### Tools
+- Hook up execsnoop.bt script onto `execveat` call
+  - [#1490](https://github.com/iovisor/bpftrace/pull/1490)
+- Support new capabilities for capable.bt
+  - [#1498](https://github.com/iovisor/bpftrace/pull/1498)
 
 #### Documentation
 
+## [0.11.2] 2020-10-30
+
+LLVM 11 support release
+
+### Added
+
+Add LLVM11 build support
+- [#1578](https://github.com/iovisor/bpftrace/pull/1578)
+
+## [0.11.1] 2020-09-22
+
+Bug fix release for the [Docker build](https://quay.io/repository/iovisor/bpftrace)
+
+### Fixed
+
+- Don't strip END_trigger
+  - [#1513](https://github.com/iovisor/bpftrace/pull/1513)
 
 ## [0.11.0] 2020-07-15
 

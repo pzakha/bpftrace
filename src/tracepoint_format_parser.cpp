@@ -58,7 +58,7 @@ bool TracepointFormatParser::parse(ast::Program *program, BPFtrace &bpftrace)
                 LOG(ERROR, ap->loc, std::cerr)
                     << "Did you mean syscalls:" << event_name << "?";
               if (bt_verbose) {
-                  std::cerr << strerror(errno) << ": " << format_file_path << std::endl;
+                LOG(ERROR) << strerror(errno) << ": " << format_file_path;
               }
               return false;
             }
@@ -114,8 +114,7 @@ bool TracepointFormatParser::parse(ast::Program *program, BPFtrace &bpftrace)
             if (bt_verbose) {
               // Having the location info isn't really useful here, so no
               // bpftrace.error
-              std::cerr << strerror(saved_errno) << ": " << format_file_path
-                        << std::endl;
+              LOG(ERROR) << strerror(saved_errno) << ": " << format_file_path;
             }
             return false;
           }
@@ -205,8 +204,10 @@ std::string TracepointFormatParser::parse_field(const std::string &line,
 
   if (field_type.find("__data_loc") != std::string::npos)
   {
-    field_type = "int";
-    field_name = "data_loc_" + field_name;
+    // Note that the type here (ie `int`) does not matter. Later during parse
+    // time the parser will rewrite this field type to a u64 so that it can
+    // hold the pointer to the actual location of the data.
+    field_type = R"_(__attribute__((annotate("tp_data_loc"))) int)_";
   }
 
   // Only adjust field types for non-arrays

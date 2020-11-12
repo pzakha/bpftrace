@@ -1,4 +1,5 @@
 #include "ast.h"
+#include "log.h"
 #include "parser.tab.hh"
 #include <iostream>
 
@@ -247,16 +248,27 @@ void ArrayAccess::accept(Visitor &v) {
   v.visit(*this);
 }
 
-Cast::Cast(const std::string &type, bool is_pointer, Expression *expr)
-    : cast_type(type), is_pointer(is_pointer), expr(expr)
+Cast::Cast(const std::string &type,
+           bool is_pointer,
+           bool is_double_pointer,
+           Expression *expr)
+    : cast_type(type),
+      is_pointer(is_pointer),
+      is_double_pointer(is_double_pointer),
+      expr(expr)
 {
 }
 
 Cast::Cast(const std::string &type,
            bool is_pointer,
+           bool is_double_pointer,
            Expression *expr,
            location loc)
-    : Expression(loc), cast_type(type), is_pointer(is_pointer), expr(expr)
+    : Expression(loc),
+      cast_type(type),
+      is_pointer(is_pointer),
+      is_double_pointer(is_double_pointer),
+      expr(expr)
 {
 }
 
@@ -402,9 +414,9 @@ std::string opstr(Jump &jump)
       return "break";
     case bpftrace::Parser::token::CONTINUE:
       return "continue";
-    default:
-      throw std::runtime_error("Unknown jump");
   }
+
+  return {}; // unreached
 }
 
 std::string opstr(Binop &binop)
@@ -428,10 +440,9 @@ std::string opstr(Binop &binop)
     case bpftrace::Parser::token::BAND:  return "&";
     case bpftrace::Parser::token::BOR:   return "|";
     case bpftrace::Parser::token::BXOR:  return "^";
-    default:
-      std::cerr << "unknown binary operator" << std::endl;
-      abort();
   }
+
+  return {}; // unreached
 }
 
 std::string opstr(Unop &unop)
@@ -443,10 +454,9 @@ std::string opstr(Unop &unop)
     case bpftrace::Parser::token::MUL: return "dereference";
     case bpftrace::Parser::token::INCREMENT: return "++";
     case bpftrace::Parser::token::DECREMENT: return "--";
-    default:
-      std::cerr << "unknown unary operator" << std::endl;
-      abort();
   }
+
+  return {}; // unreached
 }
 
 std::string AttachPoint::name(const std::string &attach_target,

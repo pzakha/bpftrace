@@ -16,6 +16,13 @@ add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/tests/codegen_includes.cpp
     -P ${CMAKE_SOURCE_DIR}/tests/codegen/generate_codegen_includes.cmake
   DEPENDS ${CODEGEN_SOURCES})
 
+if(${LLVM_VERSION} VERSION_LESS 11.0.0)
+  set(CODEGEN_SRC ${CMAKE_BINARY_DIR}/tests/codegen_includes.cpp)
+else()
+  set(CODEGEN_SRC "")
+  message("Disabled codegen test for LLVM >= 11")
+endif()
+
 add_executable(bpftrace_test
   ast.cpp
   bpftrace.cpp
@@ -31,7 +38,7 @@ add_executable(bpftrace_test
   tracepoint_format_parser.cpp
   utils.cpp
 
-  ${CMAKE_BINARY_DIR}/tests/codegen_includes.cpp
+  ${CODEGEN_SRC}
 
   ${CMAKE_SOURCE_DIR}/src/attached_probe.cpp
   ${CMAKE_SOURCE_DIR}/src/bpftrace.cpp
@@ -57,6 +64,10 @@ add_executable(bpftrace_test
   ${CMAKE_SOURCE_DIR}/src/utils.cpp
   ${BFD_DISASM_SRC}
 )
+
+if (HAVE_LIBBPF_MAP_BATCH)
+  target_compile_definitions(bpftrace_test PRIVATE HAVE_LIBBPF_MAP_BATCH)
+endif()
 
 if(HAVE_NAME_TO_HANDLE_AT)
   target_compile_definitions(bpftrace_test PRIVATE HAVE_NAME_TO_HANDLE_AT=1)
@@ -105,6 +116,9 @@ endif(HAVE_BFD_DISASM)
 if(LIBBCC_ATTACH_KPROBE_SIX_ARGS_SIGNATURE)
   target_compile_definitions(bpftrace_test PRIVATE LIBBCC_ATTACH_KPROBE_SIX_ARGS_SIGNATURE)
 endif(LIBBCC_ATTACH_KPROBE_SIX_ARGS_SIGNATURE)
+if(LIBBCC_ATTACH_UPROBE_SEVEN_ARGS_SIGNATURE)
+  target_compile_definitions(bpftrace_test PRIVATE LIBBCC_ATTACH_UPROBE_SEVEN_ARGS_SIGNATURE)
+endif(LIBBCC_ATTACH_UPROBE_SEVEN_ARGS_SIGNATURE)
 
 target_link_libraries(bpftrace_test arch ast parser resources)
 
@@ -125,6 +139,12 @@ if (STATIC_LINKING)
 else()
   target_link_libraries(bpftrace_test ${LIBELF_LIBRARIES})
 endif(STATIC_LINKING)
+
+# Support for std::filesystem
+# GCC version <9 and Clang (all versions) require -lstdc++fs
+if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" OR ${CMAKE_CXX_COMPILER_VERSION} VERSION_LESS "9")
+  target_link_libraries(bpftrace_test "stdc++fs")
+endif()
 
 find_package(Threads REQUIRED)
 

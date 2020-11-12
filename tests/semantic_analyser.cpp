@@ -30,9 +30,10 @@ void test_for_warning(
   clang.parse(driver.root_, bpftrace);
 
   ASSERT_EQ(driver.parse_str(input), 0);
-  MockBPFfeature feature;
   std::stringstream out;
-  ast::SemanticAnalyser semantics(driver.root_, bpftrace, feature, out);
+  // Override to mockbpffeature.
+  bpftrace.feature_ = std::make_unique<MockBPFfeature>(true);
+  ast::SemanticAnalyser semantics(driver.root_, bpftrace, out);
   semantics.analyse();
   if (invert)
     EXPECT_THAT(out.str(), Not(HasSubstr(warning)));
@@ -51,7 +52,7 @@ void test_for_warning(
 }
 
 void test(BPFtrace &bpftrace,
-          BPFfeature &feature,
+          bool mock_has_features,
           Driver &driver,
           const std::string &input,
           int expected_result = 0,
@@ -74,8 +75,9 @@ void test(BPFtrace &bpftrace,
 
   ASSERT_EQ(driver.parse_str(input), 0);
   out.str("");
-  ast::SemanticAnalyser semantics(
-      driver.root_, bpftrace, feature, out, has_child);
+  // Override to mockbpffeature.
+  bpftrace.feature_ = std::make_unique<MockBPFfeature>(mock_has_features);
+  ast::SemanticAnalyser semantics(driver.root_, bpftrace, out, has_child);
   EXPECT_EQ(expected_result, semantics.analyse()) << msg.str() + out.str();
 }
 
@@ -85,8 +87,7 @@ void test(BPFtrace &bpftrace,
     bool safe_mode = true)
 {
   Driver driver(bpftrace);
-  MockBPFfeature feature;
-  test(bpftrace, feature, driver, input, expected_result, safe_mode);
+  test(bpftrace, true, driver, input, expected_result, safe_mode);
 }
 
 void test(Driver &driver,
@@ -95,18 +96,18 @@ void test(Driver &driver,
     bool safe_mode = true)
 {
   auto bpftrace = get_mock_bpftrace();
-  MockBPFfeature feature;
-  test(*bpftrace, feature, driver, input, expected_result, safe_mode);
+  test(*bpftrace, true, driver, input, expected_result, safe_mode);
 }
 
-void test(BPFfeature &feature,
+void test(MockBPFfeature &feature,
           const std::string &input,
           int expected_result = 0,
           bool safe_mode = true)
 {
   auto bpftrace = get_mock_bpftrace();
   Driver driver(*bpftrace);
-  test(*bpftrace, feature, driver, input, expected_result, safe_mode);
+  bool mock_has_features = feature.has_features_;
+  test(*bpftrace, mock_has_features, driver, input, expected_result, safe_mode);
 }
 
 void test(const std::string &input,
@@ -115,11 +116,10 @@ void test(const std::string &input,
           bool has_child = false,
           int expected_field_analyser = 0)
 {
-  MockBPFfeature feature;
   auto bpftrace = get_mock_bpftrace();
   Driver driver(*bpftrace);
   test(*bpftrace,
-       feature,
+       true,
        driver,
        input,
        expected_result,
@@ -589,6 +589,15 @@ TEST(semantic_analyser, call_str_2_expr)
   test("kprobe:f { @x = str(arg0, arg1); }", 0);
 }
 
+TEST(semantic_analyser, call_str_state_leak_regression_test)
+{
+  // Previously, the semantic analyser would leak state in the first str()
+  // call. This would make the semantic analyser think it's still processing
+  // a positional parameter in the second str() call causing confusing error
+  // messages.
+  test(R"PROG(kprobe:f { $x = str($1) == "asdf"; $y = str(arg0) })PROG", 0);
+}
+
 TEST(semantic_analyser, call_buf)
 {
   test("kprobe:f { buf(arg0, 1); }", 0);
@@ -767,28 +776,28 @@ TEST(semantic_analyser, call_stack)
   test("kprobe:f { ustack(perf, 3) }", 0);
 
   // Wrong arguments
-  test("kprobe:f { kstack(3, perf) }", 10);
-  test("kprobe:f { ustack(3, perf) }", 10);
+  test("kprobe:f { kstack(3, perf) }", 1);
+  test("kprobe:f { ustack(3, perf) }", 1);
   test("kprobe:f { kstack(perf, 3, 4) }", 1);
   test("kprobe:f { ustack(perf, 3, 4) }", 1);
   test("kprobe:f { kstack(bob) }", 1);
   test("kprobe:f { ustack(bob) }", 1);
-  test("kprobe:f { kstack(\"str\") }", 10);
-  test("kprobe:f { ustack(\"str\") }", 10);
-  test("kprobe:f { kstack(perf, \"str\") }", 10);
-  test("kprobe:f { ustack(perf, \"str\") }", 10);
-  test("kprobe:f { kstack(\"str\", 3) }", 10);
-  test("kprobe:f { ustack(\"str\", 3) }", 10);
+  test("kprobe:f { kstack(\"str\") }", 1);
+  test("kprobe:f { ustack(\"str\") }", 1);
+  test("kprobe:f { kstack(perf, \"str\") }", 1);
+  test("kprobe:f { ustack(perf, \"str\") }", 1);
+  test("kprobe:f { kstack(\"str\", 3) }", 1);
+  test("kprobe:f { ustack(\"str\", 3) }", 1);
 
   // Non-literals
-  test("kprobe:f { @x = perf; kstack(@x) }", 10);
-  test("kprobe:f { @x = perf; ustack(@x) }", 10);
-  test("kprobe:f { @x = perf; kstack(@x, 3) }", 10);
-  test("kprobe:f { @x = perf; ustack(@x, 3) }", 10);
-  test("kprobe:f { @x = 3; kstack(@x) }", 10);
-  test("kprobe:f { @x = 3; ustack(@x) }", 10);
-  test("kprobe:f { @x = 3; kstack(perf, @x) }", 10);
-  test("kprobe:f { @x = 3; ustack(perf, @x) }", 10);
+  test("kprobe:f { @x = perf; kstack(@x) }", 1);
+  test("kprobe:f { @x = perf; ustack(@x) }", 1);
+  test("kprobe:f { @x = perf; kstack(@x, 3) }", 1);
+  test("kprobe:f { @x = perf; ustack(@x, 3) }", 1);
+  test("kprobe:f { @x = 3; kstack(@x) }", 1);
+  test("kprobe:f { @x = 3; ustack(@x) }", 1);
+  test("kprobe:f { @x = 3; kstack(perf, @x) }", 1);
+  test("kprobe:f { @x = 3; ustack(perf, @x) }", 1);
 }
 
 TEST(semantic_analyser, map_reassignment)
@@ -906,6 +915,15 @@ TEST(semantic_analyser, unop_not)
   test("struct X { int n; } kprobe:f { $x = (struct X*)0; ~$x; }", 10);
   test("struct X { int n; } kprobe:f { $x = (struct X)0; ~$x; }", 10);
   test("kprobe:f { ~\"0\"; }", 10);
+}
+
+TEST(semantic_analyser, unop_lnot)
+{
+  test("kprobe:f { !0; }", 0);
+  test("kprobe:f { !(int32)0; }", 0);
+  test("struct X { int n; } kprobe:f { $x = (struct X*)0; !$x; }", 10);
+  test("struct X { int n; } kprobe:f { $x = (struct X)0; !$x; }", 10);
+  test("kprobe:f { !\"0\"; }", 1);
 }
 
 TEST(semantic_analyser, unop_increment_decrement)
@@ -1302,16 +1320,22 @@ TEST(semantic_analyser, positional_parameters)
   bpftrace.add_param("hello");
   bpftrace.add_param("0x123");
 
-  test(bpftrace, "kprobe:f { printf(\"%d\", $0); }", 1);
-  test(bpftrace, "kprobe:f { printf(\"%s\", str($0)); }", 1);
-
   test(bpftrace, "kprobe:f { printf(\"%d\", $1); }", 0);
-  test(bpftrace, "kprobe:f { printf(\"%s\", str($1)); }", 10);
+  test(bpftrace, "kprobe:f { printf(\"%s\", str($1)); }", 0);
 
   test(bpftrace, "kprobe:f { printf(\"%s\", str($2)); }", 0);
+  test(bpftrace, "kprobe:f { printf(\"%s\", str($2 + 1)); }", 0);
   test(bpftrace, "kprobe:f { printf(\"%d\", $2); }", 10);
 
   test(bpftrace, "kprobe:f { printf(\"%d\", $3); }", 0);
+
+  // Pointer arithmetic in str() for parameters
+  // Only str($1 + CONST) where CONST <= strlen($1) should be allowed
+  test(bpftrace, "kprobe:f { printf(\"%s\", str($1 + 1)); }", 0);
+  test(bpftrace, "kprobe:f { printf(\"%s\", str(1 + $1)); }", 0);
+  test(bpftrace, "kprobe:f { printf(\"%s\", str($1 + 4)); }", 10);
+  test(bpftrace, "kprobe:f { printf(\"%s\", str($1 * 2)); }", 10);
+  test(bpftrace, "kprobe:f { printf(\"%s\", str($1 + 1 + 1)); }", 1);
 
   // Parameters are not required to exist to be used:
   test(bpftrace, "kprobe:f { printf(\"%s\", str($4)); }", 0);
@@ -1319,6 +1343,9 @@ TEST(semantic_analyser, positional_parameters)
 
   test(bpftrace, "kprobe:f { printf(\"%d\", $#); }", 0);
   test(bpftrace, "kprobe:f { printf(\"%s\", str($#)); }", 10);
+
+  // Parameters can be used as string literals
+  test(bpftrace, "kprobe:f { printf(\"%d\", cgroupid(str($2))); }", 0);
 
   Driver driver(bpftrace);
   test(driver, "k:f { $1 }", 0);
@@ -1366,6 +1393,30 @@ TEST(semantic_analyser, signed_int_comparison_warnings)
   test_for_warning("kretprobe:f /1 == retval/ {}", cmp_sign, invert);
   test_for_warning("kretprobe:f /retval > 1/ {}", cmp_sign, invert);
   test_for_warning("kretprobe:f /retval < 1/ {}", cmp_sign, invert);
+}
+
+TEST(semantic_analyser, string_comparison)
+{
+  test("struct MyStruct {char y[4]; } kprobe:f { $s = (struct MyStruct*)arg0; "
+       "$s->y == \"abc\"}",
+       0);
+  test("struct MyStruct {char y[4]; } kprobe:f { $s = (struct MyStruct*)arg0; "
+       "\"abc\" != $s->y}",
+       0);
+  test("struct MyStruct {char y[4]; } kprobe:f { $s = (struct MyStruct*)arg0; "
+       "\"abc\" == \"abc\"}",
+       0);
+
+  bool invert = true;
+  std::string msg = "the condition is always false";
+  test_for_warning("struct MyStruct {char y[4]; } kprobe:f { $s = (struct "
+                   "MyStruct*)arg0; $s->y == \"long string\"}",
+                   msg,
+                   invert);
+  test_for_warning("struct MyStruct {char y[4]; } kprobe:f { $s = (struct "
+                   "MyStruct*)arg0; \"long string\" != $s->y}",
+                   msg,
+                   invert);
 }
 
 TEST(semantic_analyser, signed_int_arithmetic_warnings)
@@ -1717,6 +1768,74 @@ TEST(semantic_analyser, type_ctx)
   test(driver, "t:sched:sched_one { @ = (uint64)ctx; }", 1);
 }
 
+TEST(semantic_analyser, double_pointer_basic)
+{
+  test(R"_(BEGIN { $pp = (int8 **)0; $p = *$pp; $val = *$p; })_", 0);
+  test(R"_(BEGIN { $pp = (int8 **)0; $val = **$pp; })_", 0);
+
+  const std::string structs = "struct Foo { int x; }";
+  test(structs + R"_(BEGIN { $pp = (struct Foo **)0; $val = (*$pp)->x; })_", 0);
+}
+
+TEST(semantic_analyser, double_pointer_int)
+{
+  BPFtrace bpftrace;
+  Driver driver(bpftrace);
+  test(driver, "kprobe:f { $pp = (int8 **)1; $p = *$pp; $val = *$p; }", 0);
+  auto &stmts = driver.root_->probes->at(0)->stmts;
+
+  // $pp = (int8 **)1;
+  auto assignment = static_cast<ast::AssignVarStatement *>(stmts->at(0));
+  ASSERT_TRUE(assignment->var->type.IsPtrTy());
+  ASSERT_TRUE(assignment->var->type.GetPointeeTy()->IsPtrTy());
+  ASSERT_TRUE(assignment->var->type.GetPointeeTy()->GetPointeeTy()->IsIntTy());
+  EXPECT_EQ(
+      assignment->var->type.GetPointeeTy()->GetPointeeTy()->GetIntBitWidth(),
+      8ULL);
+
+  // $p = *$pp;
+  assignment = static_cast<ast::AssignVarStatement *>(stmts->at(1));
+  ASSERT_TRUE(assignment->var->type.IsPtrTy());
+  ASSERT_TRUE(assignment->var->type.GetPointeeTy()->IsIntTy());
+  EXPECT_EQ(assignment->var->type.GetPointeeTy()->GetIntBitWidth(), 8ULL);
+
+  // $val = *$p;
+  assignment = static_cast<ast::AssignVarStatement *>(stmts->at(2));
+  ASSERT_TRUE(assignment->var->type.IsIntTy());
+  EXPECT_EQ(assignment->var->type.GetIntBitWidth(), 8ULL);
+}
+
+TEST(semantic_analyser, double_pointer_struct)
+{
+  BPFtrace bpftrace;
+  Driver driver(bpftrace);
+  test(driver,
+       "struct Foo { char x; long y; }"
+       "kprobe:f { $pp = (struct Foo **)1; $p = *$pp; $val = $p->x; }",
+       0);
+  auto &stmts = driver.root_->probes->at(0)->stmts;
+
+  // $pp = (struct Foo **)1;
+  auto assignment = static_cast<ast::AssignVarStatement *>(stmts->at(0));
+  ASSERT_TRUE(assignment->var->type.IsPtrTy());
+  ASSERT_TRUE(assignment->var->type.GetPointeeTy()->IsPtrTy());
+  ASSERT_TRUE(
+      assignment->var->type.GetPointeeTy()->GetPointeeTy()->IsRecordTy());
+  EXPECT_EQ(assignment->var->type.GetPointeeTy()->GetPointeeTy()->GetName(),
+            "struct Foo");
+
+  // $p = *$pp;
+  assignment = static_cast<ast::AssignVarStatement *>(stmts->at(1));
+  ASSERT_TRUE(assignment->var->type.IsPtrTy());
+  ASSERT_TRUE(assignment->var->type.GetPointeeTy()->IsRecordTy());
+  EXPECT_EQ(assignment->var->type.GetPointeeTy()->GetName(), "struct Foo");
+
+  // $val = $p->x;
+  assignment = static_cast<ast::AssignVarStatement *>(stmts->at(2));
+  ASSERT_TRUE(assignment->var->type.IsIntTy());
+  EXPECT_EQ(assignment->var->type.GetIntBitWidth(), 8ULL);
+}
+
 // Basic functionality test
 TEST(semantic_analyser, tuple)
 {
@@ -1741,6 +1860,7 @@ TEST(semantic_analyser, tuple)
   test(R"_(BEGIN { @t = (1, 2); @t = (4, "other"); })_", 10);
   test(R"_(BEGIN { @t = (1, 2); @t = 5; })_", 1);
   test(R"_(BEGIN { @t = (1, count()) })_", 1);
+  test(R"_(BEGIN { @t = (1, (aaa)0) })_", 1);
 }
 
 TEST(semantic_analyser, tuple_indexing)
@@ -1760,22 +1880,17 @@ TEST(semantic_analyser, tuple_assign_var)
 {
   BPFtrace bpftrace;
   Driver driver(bpftrace);
+  SizedType ty = CreateTuple({ CreateInt64(), CreateString(64) });
   test(driver, R"_(BEGIN { $t = (1, "str"); $t = (4, "other"); })_", 0);
 
   auto &stmts = driver.root_->probes->at(0)->stmts;
 
   // $t = (1, "str");
   auto assignment = static_cast<ast::AssignVarStatement *>(stmts->at(0));
-  auto ty = SizedType(Type::tuple, 8 + 64, false);
-  ty.tuple_elems.emplace_back(Type::integer, 8, true);
-  ty.tuple_elems.emplace_back(Type::string, 64, false);
   EXPECT_EQ(ty, assignment->var->type);
 
   // $t = (4, "other");
   assignment = static_cast<ast::AssignVarStatement *>(stmts->at(1));
-  ty = SizedType(Type::tuple, 8 + 64, false);
-  ty.tuple_elems.emplace_back(Type::integer, 8, true);
-  ty.tuple_elems.emplace_back(Type::string, 64, false);
   EXPECT_EQ(ty, assignment->var->type);
 }
 
@@ -1784,26 +1899,21 @@ TEST(semantic_analyser, tuple_assign_map)
 {
   BPFtrace bpftrace;
   Driver driver(bpftrace);
+  SizedType ty;
   test(driver, R"_(BEGIN { @ = (1, 3, 3, 7); @ = (0, 0, 0, 0); })_", 0);
 
   auto &stmts = driver.root_->probes->at(0)->stmts;
 
   // $t = (1, 3, 3, 7);
   auto assignment = static_cast<ast::AssignMapStatement *>(stmts->at(0));
-  auto ty = SizedType(Type::tuple, 4 * 8, false);
-  ty.tuple_elems.emplace_back(Type::integer, 8, true);
-  ty.tuple_elems.emplace_back(Type::integer, 8, false);
-  ty.tuple_elems.emplace_back(Type::integer, 8, false);
-  ty.tuple_elems.emplace_back(Type::integer, 8, false);
+  ty = CreateTuple(
+      { CreateInt64(), CreateUInt64(), CreateUInt64(), CreateUInt64() });
   EXPECT_EQ(ty, assignment->map->type);
 
   // $t = (0, 0, 0, 0);
   assignment = static_cast<ast::AssignMapStatement *>(stmts->at(1));
-  ty = SizedType(Type::tuple, 4 * 8, false);
-  ty.tuple_elems.emplace_back(Type::integer, 8, true);
-  ty.tuple_elems.emplace_back(Type::integer, 8, true);
-  ty.tuple_elems.emplace_back(Type::integer, 8, true);
-  ty.tuple_elems.emplace_back(Type::integer, 8, true);
+  ty = CreateTuple(
+      { CreateInt64(), CreateInt64(), CreateInt64(), CreateInt64() });
   EXPECT_EQ(ty, assignment->map->type);
 }
 
@@ -1812,18 +1922,14 @@ TEST(semantic_analyser, tuple_nested)
 {
   BPFtrace bpftrace;
   Driver driver(bpftrace);
+  SizedType ty_inner = CreateTuple({ CreateInt64(), CreateInt64() });
+  SizedType ty = CreateTuple({ CreateInt64(), ty_inner });
   test(driver, R"_(BEGIN { $t = (1,(1,2)); })_", 0);
 
   auto &stmts = driver.root_->probes->at(0)->stmts;
 
   // $t = (1, "str");
   auto assignment = static_cast<ast::AssignVarStatement *>(stmts->at(0));
-  auto ty = SizedType(Type::tuple, 3 * 8, false);
-  ty.tuple_elems.emplace_back(Type::integer, 8, true);
-  ty.tuple_elems.emplace_back(Type::tuple, 2 * 8, false);
-  auto ty_inner = SizedType(Type::tuple, 2 * 8, false);
-  ty_inner.tuple_elems.emplace_back(Type::tuple, 2 * 8, false);
-  ty.tuple_elems.emplace_back(std::move(ty_inner));
   EXPECT_EQ(ty, assignment->var->type);
 }
 
@@ -1835,6 +1941,34 @@ TEST(semantic_analyser, multi_pass_type_inference_zero_size_int)
   // after seeing the `@i++`. On the second pass the correct size is
   // determined.
   test(*bpftrace, "BEGIN { if (!@i) { @i++; } }", 0);
+}
+
+TEST(semantic_analyser, call_kptr_uptr)
+{
+  test("k:f { @  = kptr((int8*) arg0); }", 0);
+  test("k:f { $a = kptr((int8*) arg0); }", 0);
+
+  test("k:f { @ = kptr(arg0); }", 0);
+  test("k:f { $a = kptr(arg0); }", 0);
+
+  test("k:f { @  = uptr((int8*) arg0); }", 0);
+  test("k:f { $a = uptr((int8*) arg0); }", 0);
+
+  test("k:f { @ = uptr(arg0); }", 0);
+  test("k:f { $a = uptr(arg0); }", 0);
+}
+
+TEST(semantic_analyser, call_path)
+{
+  test("kprobe:f { $k = path( arg0 ) }", 1);
+  test("kretprobe:f { $k = path( arg0 ) }", 1);
+  test("tracepoint:category:event { $k = path( NULL ) }", 1);
+  test("kprobe:f { $k = path( arg0 ) }", 1);
+  test("kretprobe:f{ $k = path( \"abc\" ) }", 1);
+  test("tracepoint:category:event { $k = path( -100 ) }", 1);
+  test("uprobe:/bin/bash:f { $k = path( arg0 ) }", 1);
+  test("BEGIN { $k = path( 1 ) }", 1);
+  test("END { $k = path( 1 ) }", 1);
 }
 
 #ifdef HAVE_LIBBPF_BTF_DUMP
@@ -1878,6 +2012,12 @@ TEST_F(semantic_analyser_btf, short_name)
 {
   test("f:func_1 { 1 }", 0);
   test("fr:func_1 { 1 }", 0);
+}
+
+TEST_F(semantic_analyser_btf, call_path)
+{
+  test("kfunc:func_1 { $k = path( args->foo1 ) }", 0);
+  test("kretfunc:func_1 { $k = path( retval->foo1 ) }", 0);
 }
 
 #endif // HAVE_LIBBPF_BTF_DUMP
